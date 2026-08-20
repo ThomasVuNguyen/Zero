@@ -11,8 +11,8 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=production
-      - NEXT_PUBLIC_APP_URL=https://${SERVICE_FQDN_FRONTEND}
-      - NEXT_PUBLIC_BACKEND_URL=https://${SERVICE_FQDN_BACKEND}
+      - VITE_PUBLIC_APP_URL=http://${SERVICE_FQDN_FRONTEND}
+      - VITE_PUBLIC_BACKEND_URL=http://${SERVICE_FQDN_BACKEND}
     depends_on:
       backend:
         condition: service_healthy
@@ -33,15 +33,28 @@ services:
     environment:
       - PORT=8787
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-mailone}?sslmode=disable
-      - REDIS_URL=redis://:${REDIS_TOKEN:-valkey}@valkey:6379
-      - MINIO_ENDPOINT=minio
-      - MINIO_PORT=9000
-      - MINIO_USE_SSL=false
-      - MINIO_ACCESS_KEY=${SERVICE_USER_MINIO}
-      - MINIO_SECRET_KEY=${SERVICE_PASSWORD_MINIO}
-      - MINIO_BUCKET_NAME=mailone
-      - ENCRYPTION_KEY=${SERVICE_BASE64_BACKEND}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-zerodotemail}?sslmode=disable
+      - REDIS_URL=http://upstash-proxy:8080
+      - REDIS_TOKEN=${REDIS_TOKEN:-valkey}
+      - REDIS_DIRECT_URL=redis://:${REDIS_TOKEN:-valkey}@valkey:6379
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${SERVICE_USER_MINIO}
+      - S3_SECRET_KEY=${SERVICE_PASSWORD_MINIO}
+      - S3_BUCKET=threads
+      - BETTER_AUTH_SECRET=${SERVICE_BASE64_BACKEND}
+      - BETTER_AUTH_URL=http://${SERVICE_FQDN_FRONTEND}
+      - VITE_PUBLIC_APP_URL=http://${SERVICE_FQDN_FRONTEND}
+      - VITE_PUBLIC_BACKEND_URL=http://${SERVICE_FQDN_BACKEND}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENAI_MINI_MODEL=${OPENAI_MINI_MODEL:-gpt-4o-mini}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
     depends_on:
       db:
         condition: service_healthy
@@ -59,7 +72,7 @@ services:
     restart: "no"
     command: ["node", "apps/server/dist/migrate.js"]
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-mailone}?sslmode=disable
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-zerodotemail}?sslmode=disable
     depends_on:
       db:
         condition: service_healthy
@@ -72,11 +85,11 @@ services:
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
-      - POSTGRES_DB=${POSTGRES_DB:-mailone}
+      - POSTGRES_DB=${POSTGRES_DB:-zerodotemail}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-mailone}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-zerodotemail}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -136,8 +149,8 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc alias set myminio http://minio:9000 ${SERVICE_USER_MINIO} ${SERVICE_PASSWORD_MINIO};
-      mc mb myminio/mailone --ignore-existing;
-      mc anonymous set public myminio/mailone;
+      mc mb myminio/threads --ignore-existing;
+      mc anonymous set public myminio/threads;
       exit 0;
       "
     labels:
