@@ -1,3 +1,4 @@
+import type { ZeroEnv } from "./env";
 import type { Context } from 'hono';
 import { z } from 'zod';
 
@@ -238,7 +239,7 @@ export enum Tools {
   GetCurrentDate = 'getCurrentDate',
 }
 
-export type AppContext = Context<{ Bindings: Env }>;
+export type AppContext = Context<{ Bindings: ZeroEnv }>;
 
 export enum EPrompts {
   SummarizeMessage = 'SummarizeMessage',

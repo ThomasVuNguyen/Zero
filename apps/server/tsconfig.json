@@ -9,6 +9,7 @@
     "evals/**/*.ts"
   ],
   "compilerOptions": {
+    "skipLibCheck": true,
     "plugins": [
       {
         "name": "@effect/language-service"

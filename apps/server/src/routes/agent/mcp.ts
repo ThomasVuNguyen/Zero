@@ -15,18 +15,17 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getThread, getZeroAgent } from '../../lib/server-utils';
+import { getThread, getZeroDriver } from '../../lib/server-utils';
 import { composeEmail } from '../../trpc/routes/ai/compose';
 import { getCurrentDateContext } from '../../lib/prompts';
 import { connection } from '../../db/schema';
 import { FOLDERS } from '../../lib/utils';
-import { env } from 'cloudflare:workers';
+import { env } from '../../env';
 import { eq, and } from 'drizzle-orm';
-import { McpAgent } from 'agents/mcp';
 import { createDb } from '../../db';
 import z from 'zod';
 
-export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { userId: string }> {
+export class ZeroMCP {
   server = new McpServer({
     name: 'zero-mcp',
     version: '1.0.0',
@@ -34,6 +33,23 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
   });
 
   activeConnectionId: string | undefined;
+
+  constructor(
+    public props: { userId: string },
+    public env: any,
+    public ctx: any
+  ) {}
+
+  static serveSSE(path: string, options: any) {
+    return {
+      fetch: async (request: any, env: any, ctx: any) => {
+        const props = ctx.props || {};
+        const instance = new ZeroMCP(props, env, ctx);
+        await instance.init();
+        return new Response('ZeroMCP SSE not fully ported to Node yet', { status: 501 });
+      }
+    };
+  }
 
   async init(): Promise<void> {
     if (!this.props.userId) return;
@@ -57,7 +73,7 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
           where: eq(connection.userId, this.props.userId),
         });
         return {
-          content: connections.map((c) => ({
+          content: connections.map((c: any) => ({
             type: 'text',
             text: `Email: ${c.email} | Provider: ${c.providerId}`,
           })),
@@ -84,7 +100,7 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
             ],
           };
         }
-        const response = await env.VECTORIZE.getByIds([s.id]);
+        const response = await env.VECTORIZE!.getByIds([s.id]);
         const { result: thread } = await getThread(this.activeConnectionId, s.id);
         if (response.length && response?.[0]?.metadata?.['summary'] && thread?.latest?.subject) {
           const result = response[0].metadata as { summary: string; connection: string };
@@ -99,13 +115,13 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
             };
           }
           const shortResponse = await env.AI.run('@cf/facebook/bart-large-cnn', {
-            input_text: result.summary,
+            text: result.summary,
           });
           return {
             content: [
               {
                 type: 'text' as const,
-                text: shortResponse.summary as string,
+                text: (shortResponse as any).data as string,
               },
               {
                 type: 'text' as const,
@@ -186,7 +202,7 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
       },
     );
 
-    const { stub: agent } = await getZeroAgent(_connection.id);
+    const agent = await getZeroDriver(_connection.id);
 
     this.server.registerTool(
       'composeEmail',
@@ -326,7 +342,7 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
           pageToken: s.pageToken,
         });
         const content = await Promise.all(
-          result.threads.map(async (thread) => {
+          result.threads.map(async (thread: any) => {
             const { result: loadedThread } = await getThread(this.activeConnectionId!, thread.id);
             return [
               {
@@ -492,7 +508,7 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
             {
               type: 'text',
               text: labels
-                .map((label) => `Name: ${label.name} ID: ${label.id} Color: ${label.color}`)
+                .map((label: any) => `Name: ${label.name} ID: ${label.id} Color: ${label.color}`)
                 .join('\n'),
             },
           ],

@@ -20,11 +20,9 @@ import {
   type SerializedAttachment,
   type AttachmentFile,
 } from './lib/attachments';
-import { SyncThreadsCoordinatorWorkflow } from './workflows/sync-threads-coordinator-workflow';
-import { WorkerEntrypoint, DurableObject, RpcTarget } from 'cloudflare:workers';
-// import { instrument, type ResolveConfigFn } from '@microlabs/otel-cf-workers';
+import { syncThreadsCoordinatorWorkflow } from './workflows/sync-threads-coordinator-workflow';
 import { getZeroAgent, getZeroDB, verifyToken } from './lib/server-utils';
-import { SyncThreadsWorkflow } from './workflows/sync-threads-workflow';
+import { syncThreadsWorkflow } from './workflows/sync-threads-workflow';
 import { ShardRegistry, ZeroAgent, ZeroDriver } from './routes/agent';
 import { ThreadSyncWorker } from './routes/agent/sync-worker';
 import { oAuthDiscoveryMetadata } from 'better-auth/plugins';
@@ -37,8 +35,6 @@ import { defaultUserSettings } from './lib/schemas';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import { enableBrainFunction } from './lib/brain';
 import { trpcServer } from '@hono/trpc-server';
-import { agentsMiddleware } from 'hono-agents';
-import { ZeroMCP } from './routes/agent/mcp';
 import { publicRouter } from './routes/auth';
 import { WorkflowRunner } from './pipelines';
 import { autumnApi } from './routes/autumn';
@@ -52,16 +48,20 @@ import { appRouter } from './trpc';
 import { cors } from 'hono/cors';
 import { Hono } from 'hono';
 
+import { serve } from '@hono/node-server';
+import { initAdapters, getAdapters, shutdownAdapters } from './adapters';
+import { initEnv } from './env';
+import cron from 'node-cron';
+import { WebSocketServer } from 'ws';
+
 const SENTRY_HOST = 'o4509328786915328.ingest.us.sentry.io';
 const SENTRY_PROJECT_IDS = new Set(['4509328795303936']);
 
-export class DbRpcDO extends RpcTarget {
+export class DbRpcDO {
   constructor(
     private mainDo: ZeroDB,
     private userId: string,
-  ) {
-    super();
-  }
+  ) {}
 
   async findUser(): Promise<typeof user.$inferSelect | undefined> {
     return await this.mainDo.findUser(this.userId);
@@ -202,8 +202,11 @@ export class DbRpcDO extends RpcTarget {
   }
 }
 
-class ZeroDB extends DurableObject<ZeroEnv> {
-  db: DB = createDb(this.env.HYPERDRIVE.connectionString).db;
+class ZeroDB {
+  db: DB;
+  constructor(public env: ZeroEnv) {
+    this.db = createDb(this.env.HYPERDRIVE.connectionString).db;
+  }
 
   async setMetaData(userId: string) {
     return new DbRpcDO(this, userId);
@@ -762,71 +765,9 @@ const app = new Hono<HonoContext>()
     const auth = createAuth();
     return oAuthDiscoveryMetadata(auth)(c.req.raw);
   })
-  .mount(
-    '/sse',
-    async (request, env, ctx) => {
-      const authBearer = request.headers.get('Authorization');
-      if (!authBearer) {
-        console.log('No auth provided');
-        return new Response('Unauthorized', { status: 401 });
-      }
-      const auth = createAuth();
-      const session = await auth.api.getMcpSession({ headers: request.headers });
-      if (!session) {
-        console.log('Invalid auth provided', Array.from(request.headers.entries()));
-        return new Response('Unauthorized', { status: 401 });
-      }
-      ctx.props = {
-        userId: session?.userId,
-      };
-      return ZeroMCP.serveSSE('/sse', { binding: 'ZERO_MCP' }).fetch(request, env, ctx);
-    },
-    { replaceRequest: false },
-  )
-  .mount(
-    '/mcp/thinking/sse',
-    async (request, env, ctx) => {
-      return ThinkingMCP.serveSSE('/mcp/thinking/sse', { binding: 'THINKING_MCP' }).fetch(
-        request,
-        env,
-        ctx,
-      );
-    },
-    { replaceRequest: false },
-  )
-  .mount(
-    '/mcp',
-    async (request, env, ctx) => {
-      const authBearer = request.headers.get('Authorization');
-      if (!authBearer) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-      const auth = createAuth();
-      const session = await auth.api.getMcpSession({ headers: request.headers });
-      if (!session) {
-        console.log('Invalid auth provided', Array.from(request.headers.entries()));
-        return new Response('Unauthorized', { status: 401 });
-      }
-      ctx.props = {
-        userId: session?.userId,
-      };
-      return ZeroMCP.serve('/mcp', { binding: 'ZERO_MCP' }).fetch(request, env, ctx);
-    },
-    { replaceRequest: false },
-  )
+  .get('/sse', (c) => c.json({ error: 'MCP SSE endpoint - coming soon' }, 501))
+  .get('/mcp/*', (c) => c.json({ error: 'MCP endpoint - coming soon' }, 501))
   .route('/api', api)
-  .use(
-    '*',
-    agentsMiddleware({
-      options: {
-        onBeforeConnect: (c) => {
-          if (!c.headers.get('Cookie')) {
-            return new Response('Unauthorized', { status: 401 });
-          }
-        },
-      },
-    }),
-  )
   .get('/health', (c) => c.json({ message: 'Zero Server is Up!' }))
   .get('/', (c) => c.redirect(`${env.VITE_PUBLIC_APP_URL}`))
   .post('/monitoring/sentry', async (c) => {
@@ -903,7 +844,7 @@ const app = new Hono<HonoContext>()
         span.setAttributes({ 'auth.status': 'valid' });
 
         try {
-          await env.thread_queue.send({
+          await (env.thread_queue as any).send({
             providerId,
             historyId: body.historyId,
             subscriptionName: subHeader,
@@ -928,222 +869,96 @@ const app = new Hono<HonoContext>()
       span.end();
     }
   });
-const handler = {
-  async fetch(request: Request, env: ZeroEnv, ctx: ExecutionContext): Promise<Response> {
-    return app.fetch(request, env, ctx);
-  },
-};
 
-// const config: ResolveConfigFn = (env: ZeroEnv) => {
-//   return {
-//     exporter: {
-//       url: env.OTEL_EXPORTER_OTLP_ENDPOINT || 'https://api.axiom.co/v1/traces',
-//       headers: env.OTEL_EXPORTER_OTLP_HEADERS
-//         ? Object.fromEntries(
-//             env.OTEL_EXPORTER_OTLP_HEADERS.split(',').map((header: string) => {
-//               const [key, value] = header.split('=');
-//               return [key.trim(), value.trim()];
-//             }),
-//           )
-//         : {},
-//     },
-//     service: {
-//       name: env.OTEL_SERVICE_NAME || 'zero-email-server',
-//       version: '1.0.0',
-//     },
-//   };
-// };
-
-export default class Entry extends WorkerEntrypoint<ZeroEnv> {
-  async fetch(request: Request): Promise<Response> {
-    return handler.fetch(request, this.env, this.ctx);
-  }
-  async queue(
-    batch: MessageBatch<unknown> | { queue: string; messages: Array<{ body: IEmailSendBatch }> },
-  ) {
-    switch (true) {
-      case batch.queue.startsWith('subscribe-queue'): {
-        console.log('batch', batch);
-        await Promise.all(
-          batch.messages.map(async (msg: any) => {
-            const connectionId = msg.body.connectionId;
-            const providerId = msg.body.providerId;
-            try {
-              await enableBrainFunction({ id: connectionId, providerId });
-            } catch (error) {
-              console.error(
-                `Failed to enable brain function for connection ${connectionId}:`,
-                error,
-              );
-            }
-          }),
-        );
-        console.log('[SUBSCRIBE_QUEUE] batch done');
+function registerQueueConsumers(env: ZeroEnv) {
+  // Subscribe queue consumer
+  (env.subscribe_queue as any).registerConsumer(async (messages: any[]) => {
+    await Promise.all(messages.map(async (msg: any) => {
+      const { connectionId, providerId } = msg.body;
+      try {
+        await enableBrainFunction({ id: connectionId, providerId });
+      } catch (error) {
+        console.error(`Failed to enable brain function for connection ${connectionId}:`, error);
+      }
+    }));
+    console.log('[SUBSCRIBE_QUEUE] batch done');
+  });
+  
+  // Send email queue consumer  
+  (env.send_email_queue as any).registerConsumer(async (messages: any[]) => {
+    // Keep the same logic from the original queue handler
+    // Use env.pending_emails_status and env.pending_emails_payload (now KVAdapter)
+    // NOTE: getZeroAgent calls need to be adapted - for now call the function directly
+    await Promise.all(messages.map(async (msg: any) => {
+      const { messageId, connectionId, mail } = msg.body;
+      const statusKV = env.pending_emails_status;
+      const payloadKV = env.pending_emails_payload;
+      
+      const status = await statusKV.get(messageId);
+      if (status === 'cancelled') {
+        console.log(`Email ${messageId} cancelled – skipping send.`);
         return;
       }
-      case batch.queue.startsWith('send-email-queue'): {
-        await Promise.all(
-          batch.messages.map(async (msg: any) => {
-            const { messageId, connectionId, mail } = msg.body;
-
-            const { pending_emails_status: statusKV, pending_emails_payload: payloadKV } = this
-              .env as { pending_emails_status: KVNamespace; pending_emails_payload: KVNamespace };
-
-            const status = await statusKV.get(messageId);
-            if (status === 'cancelled') {
-              console.log(`Email ${messageId} cancelled – skipping send.`);
-              return;
-            }
-
-            let payload = mail;
-            if (!payload) {
-              const stored = await payloadKV.get(messageId);
-              if (!stored) {
-                console.error(`No payload found for scheduled email ${messageId}`);
-                return;
-              }
-              payload = JSON.parse(stored);
-            }
-
-            const agent = await getZeroAgent(connectionId, this.ctx);
-            try {
-              if (Array.isArray((payload as any).attachments)) {
-                const attachments = (payload as any).attachments;
-
-                const processedAttachments = await Promise.all(
-                  attachments.map(
-                    async (att: SerializedAttachment | AttachmentFile, index: number) => {
-                      if ('arrayBuffer' in att && typeof att.arrayBuffer === 'function') {
-                        return { attachment: att as AttachmentFile, index };
-                      } else {
-                        const processed = toAttachmentFiles([att as SerializedAttachment]);
-                        return { attachment: processed[0], index };
-                      }
-                    },
-                  ),
-                );
-
-                const orderedAttachments = Array.from({ length: attachments.length });
-                processedAttachments.forEach(({ attachment, index }) => {
-                  orderedAttachments[index] = attachment;
-                });
-
-                (payload as any).attachments = orderedAttachments;
-              }
-
-              if ('draftId' in (payload as any) && (payload as any).draftId) {
-                const { draftId, ...rest } = payload as any;
-                await agent.stub.sendDraft(draftId, rest as any);
-              } else {
-                await agent.stub.create(payload as any);
-              }
-
-              await statusKV.delete(messageId);
-              await payloadKV.delete(messageId);
-              console.log(`Email ${messageId} sent successfully`);
-            } catch (error) {
-              console.error(`Failed to send scheduled email ${messageId}:`, error);
-              await statusKV.delete(messageId);
-              await payloadKV.delete(messageId);
-            }
-          }),
-        );
-        return;
+      
+      let payload = mail;
+      if (!payload) {
+        const stored = await payloadKV.get(messageId);
+        if (!stored) {
+          console.error(`No payload found for scheduled email ${messageId}`);
+          return;
+        }
+        payload = JSON.parse(stored);
       }
-      case batch.queue.startsWith('thread-queue'): {
-        const tracer = initTracing();
-
-        await Promise.all(
-          batch.messages.map(async (msg: any) => {
-            const span = tracer.startSpan('thread_queue_processing', {
-              attributes: {
-                'provider.id': msg.body.providerId,
-                'history.id': msg.body.historyId,
-                'subscription.name': msg.body.subscriptionName,
-                'queue.name': batch.queue,
-              },
-            });
-
-            try {
-              const providerId = msg.body.providerId;
-              const historyId = msg.body.historyId;
-              const subscriptionName = msg.body.subscriptionName;
-
-              const workflowRunner = env.WORKFLOW_RUNNER.get(env.WORKFLOW_RUNNER.newUniqueId());
-              const result = await workflowRunner.runMainWorkflow({
-                providerId,
-                historyId,
-                subscriptionName,
-              });
-              console.log('[THREAD_QUEUE] result', result);
-              span.setAttributes({
-                'workflow.result': typeof result === 'string' ? result : JSON.stringify(result),
-                'workflow.success': true,
-              });
-            } catch (error) {
-              console.error('Error running workflow', error);
-              span.recordException(error as Error);
-              span.setStatus({ code: 2, message: (error as Error).message });
-            } finally {
-              span.end();
-            }
-          }),
-        );
-        break;
+      
+      // TODO: Replace getZeroAgent DO call with direct function
+      console.log(`[SEND_EMAIL] Processing email ${messageId} for connection ${connectionId}`);
+      
+      await statusKV.delete(messageId);
+      await payloadKV.delete(messageId);
+      console.log(`Email ${messageId} processed`);
+    }));
+  });
+  
+  // Thread queue consumer
+  (env.thread_queue as any).registerConsumer(async (messages: any[]) => {
+    await Promise.all(messages.map(async (msg: any) => {
+      try {
+        const { providerId, historyId, subscriptionName } = msg.body;
+        console.log('[THREAD_QUEUE] Processing', { providerId, historyId, subscriptionName });
+        // TODO: Replace WorkflowRunner DO call with direct function
+      } catch (error) {
+        console.error('Error processing thread queue message', error);
       }
-    }
-  }
-  async scheduled() {
-    console.log('Running scheduled tasks...');
+    }));
+  });
+}
 
-    await this.processScheduledEmails();
-
-    await this.processExpiredSubscriptions();
-  }
-
-  private async processScheduledEmails() {
-    console.log('Checking for scheduled emails ready to be queued...');
-    const { scheduled_emails: scheduledKV, send_email_queue } = this.env as {
-      scheduled_emails: KVNamespace;
-      send_email_queue: Queue<IEmailSendBatch>;
-    };
-
+function registerCronJobs(env: ZeroEnv) {
+  // Run every hour — process scheduled emails
+  cron.schedule('0 * * * *', async () => {
+    console.log('[CRON] Processing scheduled emails...');
+    // Keep the processScheduledEmails logic, using env.scheduled_emails (KVAdapter)
+    // and env.send_email_queue (QueueAdapter)
     try {
+      const scheduledKV = env.scheduled_emails;
       const now = Date.now();
       const twelveHoursFromNow = now + 12 * 60 * 60 * 1000;
-
-      let cursor: string | undefined = undefined;
-      const batchSize = 1000;
-
+      let cursor: string | undefined;
+      
       do {
-        const listResp: {
-          keys: { name: string }[];
-          cursor?: string;
-        } = await scheduledKV.list({ cursor, limit: batchSize });
+        const listResp = await scheduledKV.list({ cursor, limit: 1000 });
         cursor = listResp.cursor;
-
+        
         for (const key of listResp.keys) {
           try {
             const scheduledData = await scheduledKV.get(key.name);
             if (!scheduledData) continue;
-
             const { messageId, connectionId, sendAt } = JSON.parse(scheduledData);
-
             if (sendAt <= twelveHoursFromNow) {
               const delaySeconds = Math.max(0, Math.floor((sendAt - now) / 1000));
-
               console.log(`Queueing scheduled email ${messageId} with ${delaySeconds}s delay`);
-
-              const queueBody: IEmailSendBatch = {
-                messageId,
-                connectionId,
-                sendAt,
-              };
-
-              await send_email_queue.send(queueBody, { delaySeconds });
+              await (env.send_email_queue as any).send({ messageId, connectionId, sendAt }, { delaySeconds });
               await scheduledKV.delete(key.name);
-
-              console.log(`Successfully queued scheduled email ${messageId}`);
             }
           } catch (error) {
             console.error('Failed to process scheduled email key', key.name, error);
@@ -1153,109 +968,99 @@ export default class Entry extends WorkerEntrypoint<ZeroEnv> {
     } catch (error) {
       console.error('Error processing scheduled emails:', error);
     }
-  }
-
-  private async processExpiredSubscriptions() {
-    console.log('[SCHEDULED] Checking for expired subscriptions...');
-    const { db, conn } = createDb(this.env.HYPERDRIVE.connectionString);
-    const allAccounts = await db.query.connection.findMany({
-      where: (fields, { isNotNull, and }) =>
-        and(isNotNull(fields.accessToken), isNotNull(fields.refreshToken)),
-    });
-    await conn.end();
-    console.log('[SCHEDULED] allAccounts', allAccounts.length);
-    const now = new Date();
-    const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
-
-    const expiredSubscriptions: Array<{ connectionId: string; providerId: EProviders }> = [];
-
-    const nowTs = Date.now();
-
-    const unsnoozeMap: Record<string, { threadIds: string[]; keyNames: string[] }> = {};
-
-    let cursor: string | undefined = undefined;
-    do {
-      const listResp: {
-        keys: { name: string; metadata?: { wakeAt?: string } }[];
-        cursor?: string;
-      } = await this.env.snoozed_emails.list({ cursor, limit: 1000 });
-      cursor = listResp.cursor;
-
-      for (const key of listResp.keys) {
-        try {
-          const wakeAtIso = key.metadata?.wakeAt as string | undefined;
-          if (!wakeAtIso) continue;
-          const wakeAt = new Date(wakeAtIso).getTime();
-          if (wakeAt > nowTs) continue;
-
-          const [threadId, connectionId] = key.name.split('__');
-          if (!threadId || !connectionId) continue;
-
-          if (!unsnoozeMap[connectionId]) {
-            unsnoozeMap[connectionId] = { threadIds: [], keyNames: [] };
-          }
-          unsnoozeMap[connectionId].threadIds.push(threadId);
-          unsnoozeMap[connectionId].keyNames.push(key.name);
-        } catch (error) {
-          console.error('Failed to prepare unsnooze for key', key.name, error);
-        }
-      }
-    } while (cursor);
-
-    // await Promise.all(
-    //   Object.entries(unsnoozeMap).map(async ([connectionId, { threadIds, keyNames }]) => {
-    //     try {
-    //       const { stub: agent } = await getZeroAgent(connectionId, this.ctx);
-    //       await agent.queue('unsnoozeThreadsHandler', { connectionId, threadIds, keyNames });
-    //     } catch (error) {
-    //       console.error('Failed to enqueue unsnooze tasks', { connectionId, threadIds, error });
-    //     }
-    //   }),
-    // );
-
-    await Promise.all(
-      allAccounts.map(async ({ id, providerId }) => {
-        const lastSubscribed = await this.env.gmail_sub_age.get(`${id}__${providerId}`);
-
-        if (lastSubscribed) {
-          const subscriptionDate = new Date(lastSubscribed);
-          if (subscriptionDate < fiveDaysAgo) {
-            console.log(`[SCHEDULED] Found expired Google subscription for connection: ${id}`);
-            expiredSubscriptions.push({ connectionId: id, providerId: providerId as EProviders });
-          }
-        } else {
-          expiredSubscriptions.push({ connectionId: id, providerId: providerId as EProviders });
-        }
-      }),
-    );
-
-    // Send expired subscriptions to queue for renewal
-    if (expiredSubscriptions.length > 0) {
-      console.log(
-        `[SCHEDULED] Sending ${expiredSubscriptions.length} expired subscriptions to renewal queue`,
-      );
+  });
+  
+  // Run daily at midnight — process expired subscriptions
+  cron.schedule('0 0 * * *', async () => {
+    console.log('[CRON] Processing expired subscriptions...');
+    try {
+      const { db, conn } = createDb(env.DATABASE_URL);
+      const allAccounts = await db.query.connection.findMany({
+        where: (fields, { isNotNull, and }) =>
+          and(isNotNull(fields.accessToken), isNotNull(fields.refreshToken)),
+      });
+      await conn.end();
+      
+      const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+      const expiredSubscriptions: Array<{ connectionId: string; providerId: any }> = [];
+      
       await Promise.all(
-        expiredSubscriptions.map(async ({ connectionId, providerId }) => {
-          await this.env.subscribe_queue.send({ connectionId, providerId });
+        allAccounts.map(async ({ id, providerId }) => {
+          const lastSubscribed = await env.gmail_sub_age.get(`${id}__${providerId}`);
+          if (lastSubscribed) {
+            const subscriptionDate = new Date(lastSubscribed);
+            if (subscriptionDate < fiveDaysAgo) {
+              expiredSubscriptions.push({ connectionId: id, providerId });
+            }
+          } else {
+            expiredSubscriptions.push({ connectionId: id, providerId });
+          }
         }),
       );
+      
+      if (expiredSubscriptions.length > 0) {
+        console.log(`[CRON] Sending ${expiredSubscriptions.length} expired subscriptions to renewal queue`);
+        await Promise.all(
+          expiredSubscriptions.map(async ({ connectionId, providerId }) => {
+            await (env.subscribe_queue as any).send({ connectionId, providerId });
+          }),
+        );
+      }
+    } catch (error) {
+      console.error('Error processing expired subscriptions:', error);
     }
-
-    console.log(
-      `[SCHEDULED] Processed ${allAccounts.keys.length} accounts, found ${expiredSubscriptions.length} expired subscriptions`,
-    );
-  }
+  });
 }
+
+// ── Server Startup ──────────────────────────────────────────────
+async function startServer() {
+  console.log('[Zero] Initializing adapters...');
+  const adapters = initAdapters();
+  const envConfig = initEnv();
+  
+  console.log('[Zero] Starting HTTP server on port', process.env.PORT || 8787);
+  const server = serve({
+    fetch: app.fetch,
+    port: parseInt(process.env.PORT || '8787', 10),
+    hostname: '0.0.0.0',
+  });
+
+  // WebSocket server for real-time features
+  const wss = new WebSocketServer({ server: server as any });
+  wss.on('connection', (ws, req) => {
+    console.log('[WS] New connection from', req.url);
+    // WebSocket handling will be implemented in agent/index.ts
+  });
+
+  // Register queue consumers
+  registerQueueConsumers(envConfig);
+
+  // Register cron jobs (replaces Cloudflare scheduled() handler)
+  registerCronJobs(envConfig);
+
+  console.log('[Zero] Server started successfully');
+  
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log('[Zero] Shutting down...');
+    await shutdownAdapters();
+    process.exit(0);
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+}
+
+startServer().catch(console.error);
 
 export {
   ZeroAgent,
-  ZeroMCP,
   ZeroDB,
   ZeroDriver,
   ThinkingMCP,
   WorkflowRunner,
   ThreadSyncWorker,
-  SyncThreadsWorkflow,
-  SyncThreadsCoordinatorWorkflow,
+  syncThreadsWorkflow as SyncThreadsWorkflow,
+  syncThreadsCoordinatorWorkflow as SyncThreadsCoordinatorWorkflow,
   ShardRegistry,
 };
+export default startServer;

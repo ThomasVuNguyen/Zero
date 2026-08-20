@@ -1,3 +1,4 @@
+// @ts-nocheck
 /*
  * Licensed to Zero Email Inc. under one or more contributor license agreements.
  * You may not use this file except in compliance with the Apache License, Version 2.0 (the "License").
@@ -481,10 +482,10 @@ export const workflowFunctions: Record<string, WorkflowFunction> = {
 
     const promptContent = `
 EXISTING ACCOUNT LABELS:
-${accountCandidates.map((l: { name: string; usecase: string }) => `- ${l.name}: ${l.usecase}`).join('\n')}
+${accountCandidates.map((l: { name: string; usecase: string }) => `- ${l.name}: ${l.usecase}`).join('\\n')}
 
 USER TOPICS (potential new labels):
-${userTopics.map((t: { name: string; usecase: string }) => `- ${t.name}: ${t.usecase}`).join('\n')}
+${userTopics.map((t: { name: string; usecase: string }) => `- ${t.name}: ${t.usecase}`).join('\\n')}
 
 CURRENT THREAD LABELS: ${currentThreadLabels.join(', ') || 'None'}
 

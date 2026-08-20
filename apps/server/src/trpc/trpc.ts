@@ -1,7 +1,6 @@
 import { getActiveConnection, getZeroDB } from '../lib/server-utils';
 import { Ratelimit, type RatelimitConfig } from '@upstash/ratelimit';
 import type { HonoContext, HonoVariables } from '../ctx';
-import { getConnInfo } from 'hono/cloudflare-workers';
 import { initTRPC, TRPCError } from '@trpc/server';
 import { createLoggingMiddleware } from '../lib/trpc-logging';
 
@@ -150,7 +149,7 @@ export const createRateLimiterMiddleware = (config: {
       analytics: true,
       prefix: config.generatePrefix(ctx, input),
     });
-    const finalIp = getConnInfo(ctx.c).remote.address ?? 'no-ip';
+    const finalIp = ctx.c.req.header('x-forwarded-for') ?? ctx.c.req.header('x-real-ip') ?? 'no-ip';
     const { success, limit, reset, remaining } = await ratelimiter.limit(finalIp);
 
     ctx.c.res.headers.append('X-RateLimit-Limit', limit.toString());

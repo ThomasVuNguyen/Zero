@@ -109,11 +109,6 @@ export const getEmbeddingVector = async (text: string) => {
     const embeddingResponse = await env.AI.run(
       '@cf/baai/bge-large-en-v1.5',
       { text: text.trim() },
-      {
-        gateway: {
-          id: 'vectorize-save',
-        },
-      },
     );
     const embeddingVector = (embeddingResponse as any).data?.[0];
     return embeddingVector ?? null;

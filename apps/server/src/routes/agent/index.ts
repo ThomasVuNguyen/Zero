@@ -45,14 +45,10 @@ import {
 import type { IGetThreadResponse, IGetThreadsResponse, MailManager } from '../../lib/driver/types';
 import { connectionToDriver, getZeroSocketAgent, reSyncThread } from '../../lib/server-utils';
 import { generateWhatUserCaresAbout, type UserTopic } from '../../lib/analyze/interests';
-import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import { AiChatPrompt, GmailSearchAssistantSystemPrompt } from '../../lib/prompts';
-import { Migratable, Queryable, Transfer } from 'dormroom';
 import type { CreateDraftData } from '../../lib/schemas';
-import { drizzle } from 'drizzle-orm/durable-sqlite';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { getPrompt } from '../../pipelines.effect';
-import { AIChatAgent } from 'agents/ai-chat-agent';
-import { DurableObject } from 'cloudflare:workers';
 import { ToolOrchestrator } from './orchestrator';
 import { eq, desc, isNotNull } from 'drizzle-orm';
 import migrations from './db/drizzle/migrations';
@@ -63,8 +59,9 @@ import type { WSMessage } from 'partyserver';
 import { tools as authTools } from './tools';
 import { processToolCalls } from './utils';
 import { type ZeroEnv } from '../../env';
-import { type Connection } from 'agents';
 import { openai } from '@ai-sdk/openai';
+import { syncThreadsCoordinatorWorkflow } from '../../workflows/sync-threads-coordinator-workflow';
+import { ThreadSyncWorker } from './sync-worker';
 import * as schema from './db/schema';
 import { threads } from './db/schema';
 import { Effect, pipe } from 'effect';
@@ -245,20 +242,20 @@ export interface CachedTopics {
 
 // Requirements interface
 export interface TopicGenerationRequirements {
-  readonly storage: DurableObjectStorage;
-  readonly agent?: DurableObjectStub<ZeroAgent>;
+  readonly storage: any; // TODO: Replace DurableObjectStorage
+  readonly agent?: ZeroAgent;
   readonly connectionId: string;
 }
 
 export interface ThreadSyncRequirements {
   readonly driver: MailManager;
-  readonly agent?: DurableObjectStub<ZeroAgent>;
+  readonly agent?: ZeroAgent;
   readonly connectionId: string;
 }
 
 export interface FolderSyncRequirements {
   readonly driver: MailManager;
-  readonly agent?: DurableObjectStub<ZeroAgent>;
+  readonly agent?: ZeroAgent;
   readonly connectionId: string;
 }
 
@@ -295,37 +292,24 @@ const _migrations = Object.fromEntries(
   Object.entries(migrations.migrations).map(([_, value], index) => [index + 1, [value]]),
 );
 
-@Migratable({
-  migrations: {
-    1: [
-      `CREATE TABLE IF NOT EXISTS shards (
-      shard_id TEXT PRIMARY KEY,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )`,
-    ],
-  },
-})
-@Queryable()
-export class ShardRegistry extends DurableObject<ZeroEnv> {
-  sql: SqlStorage;
-  constructor(ctx: DurableObjectState, env: ZeroEnv) {
-    super(ctx, env);
-    this.sql = ctx.storage.sql;
+export class ShardRegistry {
+  private env: ZeroEnv;
+  private shards: Map<string, any> = new Map();
+  
+  constructor(env: ZeroEnv) {
+    this.env = env;
   }
 }
 
-@Migratable({
-  migrations: _migrations,
-})
-@Queryable()
-export class ZeroDriver extends DurableObject<ZeroEnv> {
-  transfer = new Transfer(this);
-  sql: SqlStorage;
+export class ZeroDriver {
+  private env: ZeroEnv;
+  private cache: Map<string, any> = new Map();
+  // TODO: sql/drizzle connection replacement
+  private sql: any;
   private db: DB;
   private syncThreadsInProgress: Map<string, boolean> = new Map();
   private driver: MailManager | null = null;
-  private agent: DurableObjectStub<ZeroAgent> | null = null;
+  private agent: ZeroAgent | null = null;
   private name: string = 'general';
   private connection: typeof connection.$inferSelect | null = null;
   private recipientCache: {
@@ -378,21 +362,21 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
     return { email, name };
   }
 
-  constructor(ctx: DurableObjectState, env: ZeroEnv) {
-    super(ctx, env);
-    this.sql = ctx.storage.sql;
-    this.db = drizzle(ctx.storage, { schema });
+  constructor(env: ZeroEnv) {
+    this.env = env;
+    // TODO: Initialize db with Postgres connection
+    this.db = drizzle(process.env.DATABASE_URL as any, { schema }) as any;
   }
 
   async setName(name: string) {
     this.name = name;
-    await this.ctx.blockConcurrencyWhile(async () => {
+    
       await this.setupAuth();
-    });
+    
   }
 
   getDatabaseSize() {
-    return this.ctx.storage.sql.databaseSize;
+    return 0 // TODO: get database size from postgres;
   }
 
   async isSyncing(): Promise<boolean> {
@@ -423,7 +407,7 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
       };
 
       // Check storage first
-      const stored = yield* Effect.tryPromise(() => this.ctx.storage.get(TOPIC_CACHE_KEY)).pipe(
+      const stored = yield* Effect.sync(() => this.cache.get(TOPIC_CACHE_KEY)).pipe(
         Effect.tap(() =>
           Effect.sync(() => console.log(`[getUserTopics] Checking storage for cached topics`)),
         ),
@@ -564,8 +548,8 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
         );
 
         // Store the result
-        yield* Effect.tryPromise(() =>
-          this.ctx.storage.put(TOPIC_CACHE_KEY, {
+        yield* Effect.sync(() =>
+          this.cache.set(TOPIC_CACHE_KEY, {
             topics,
             timestamp: Date.now(),
           }),
@@ -581,7 +565,7 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
 
         // Broadcast message if agent exists
         if (this.agent) {
-          yield* Effect.tryPromise(() =>
+          yield* Effect.sync(() =>
             this.agent!.broadcastChatMessage({
               type: OutgoingMessageType.User_Topics,
             }),
@@ -679,15 +663,15 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
   }
 
   private dropTables() {
-    this.sql.exec(`DROP TABLE IF EXISTS threads`);
-    this.sql.exec(`DROP TABLE IF EXISTS thread_labels`);
-    this.sql.exec(`DROP TABLE IF EXISTS labels`);
+    console.log("[TODO] Replace sql.exec with Postgres", `DROP TABLE IF EXISTS threads`);
+    console.log("[TODO] Replace sql.exec with Postgres", `DROP TABLE IF EXISTS thread_labels`);
+    console.log("[TODO] Replace sql.exec with Postgres", `DROP TABLE IF EXISTS labels`);
   }
 
   private createTables() {
     const m = Object.values(migrations.migrations);
     for (const migration of m) {
-      this.sql.exec(migration);
+      console.log("[TODO] Replace sql.exec with Postgres", migration);
     }
   }
 
@@ -710,7 +694,7 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
         this.driver = connectionToDriver(_connection);
         this.connection = _connection;
       }
-      this.ctx.waitUntil(conn.end());
+      void conn.end().catch(console.error);
     }
     if (!this.agent) this.agent = await getZeroSocketAgent(this.name);
   }
@@ -948,7 +932,7 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
         this.syncThreadsInProgress.set(threadId, true);
 
         const latest = yield* Effect.tryPromise(() =>
-          this.env.THREAD_SYNC_WORKER.get(this.env.THREAD_SYNC_WORKER.newUniqueId()).syncThread(
+          new ThreadSyncWorker(this.env).syncThread(
             this.connection!,
             threadId,
           ),
@@ -1009,7 +993,7 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
 
         // Broadcast update if agent exists
         if (this.agent) {
-          yield* Effect.tryPromise(() =>
+          yield* Effect.sync(() =>
             this.agent!.broadcastChatMessage({
               type: OutgoingMessageType.Mail_Get,
               threadId,
@@ -1075,7 +1059,7 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
         folder_filter: `${this.name}/`,
       });
 
-      const answer = await this.env.AI.autorag(this.env.AUTORAG_ID).aiSearch({
+      const answer = await (this.env.AI as any).autorag(this.env.AUTORAG_ID).aiSearch({
         query: query,
         //   rewrite_query: true,
         max_num_results: 3,
@@ -1119,7 +1103,7 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
     // Create parallel Effect operations
     const ragEffect = Effect.tryPromise(() =>
       this.inboxRag(query).then((rag) => {
-        const ids = rag?.data?.map((d) => d.attributes.threadId).filter(Boolean) ?? [];
+        const ids = rag?.data?.map((d: any) => d.attributes?.threadId).filter(Boolean) ?? [];
         return ids.slice(0, maxResults);
       }),
     ).pipe(Effect.catchAll(() => Effect.succeed([])));
@@ -1666,15 +1650,11 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
     try {
       console.log(`[ZeroDriver] Triggering sync coordinator workflow for ${this.name}/${folder}`);
 
-      const instance = await this.env.SYNC_THREADS_COORDINATOR_WORKFLOW.create({
-        params: {
-          connectionId: this.name,
-          folder: folder,
-        },
-      });
+      syncThreadsCoordinatorWorkflow(this.env, { connectionId: this.name, folder })
+        .catch(e => console.error('Workflow failed', e));
 
       console.log(
-        `[ZeroDriver] Sync coordinator workflow triggered for ${this.name}/${folder}, instance: ${instance.id}`,
+        `[ZeroDriver] Sync coordinator workflow triggered for ${this.name}/${folder}`,
       );
     } catch (error) {
       console.error(
@@ -1697,17 +1677,28 @@ export class ZeroDriver extends DurableObject<ZeroEnv> {
   }
 }
 
-export class ZeroAgent extends AIChatAgent<ZeroEnv> {
+export class ZeroAgent {
+  private env: ZeroEnv;
+  private connectionId: string;
+  private mcp: any; // TODO: Setup MCP
+  private name: string;
+  private messages: any[] = [];
+  public onError = (e: any) => e;
+  public broadcast = (_msg: string, _exclude?: string[]) => {};
+  public persistMessages = async (_msgs: any[], _exclude?: string[]) => {};
+  public cache: Map<string, any> = new Map();
+  
+  constructor(env: ZeroEnv, connectionId: string) {
+    this.env = env;
+    this.connectionId = connectionId;
+    this.name = connectionId;
+  }
   private chatMessageAbortControllers: Map<string, AbortController> = new Map();
 
   async registerZeroMCP() {
     await this.mcp.connect(this.env.VITE_PUBLIC_BACKEND_URL + '/sse', {
       transport: {
-        authProvider: new DurableObjectOAuthClientProvider(
-          this.ctx.storage,
-          'zero-mcp',
-          this.env.VITE_PUBLIC_BACKEND_URL,
-        ),
+        authProvider: null /* TODO: Replace DurableObjectOAuthClientProvider */,
       },
     });
   }
@@ -1715,28 +1706,10 @@ export class ZeroAgent extends AIChatAgent<ZeroEnv> {
   async registerThinkingMCP() {
     await this.mcp.connect(this.env.VITE_PUBLIC_BACKEND_URL + '/mcp/thinking/sse', {
       transport: {
-        authProvider: new DurableObjectOAuthClientProvider(
-          this.ctx.storage,
-          'thinking-mcp',
-          this.env.VITE_PUBLIC_BACKEND_URL,
-        ),
+        authProvider: null /* TODO: Replace DurableObjectOAuthClientProvider */,
       },
     });
   }
-
-  onStart() {
-    this.registerThinkingMCP();
-  }
-
-  async onConnect(connection: Connection): Promise<void> {
-    connection.send(
-      JSON.stringify({
-        type: OutgoingMessageType.Mail_List,
-        folder: 'inbox',
-      }),
-    );
-  }
-
   async _reSyncThread({ threadId }: { threadId: string }) {
     await reSyncThread(this.name, threadId);
   }
@@ -1837,7 +1810,7 @@ export class ZeroAgent extends AIChatAgent<ZeroEnv> {
     }
   }
 
-  async onMessage(connection: Connection, message: WSMessage) {
+  async onMessage(connection: any, message: WSMessage) {
     if (typeof message === 'string') {
       let data: IncomingMessage;
       try {
@@ -1910,7 +1883,7 @@ export class ZeroAgent extends AIChatAgent<ZeroEnv> {
         }
         case IncomingMessageType.ChatClear: {
           this.destroyAbortControllers();
-          void this.sql`delete from cf_ai_chat_agent_messages`;
+          // TODO: Replace sql string template with Postgres
           this.messages = [];
           this.broadcastChatMessage(
             {
@@ -1997,7 +1970,7 @@ export class ZeroAgent extends AIChatAgent<ZeroEnv> {
     timestamp: number;
   } | null> {
     try {
-      const cached = await this.ctx.storage.get('do_state_cache');
+      const cached = await this.cache.get('do_state_cache');
       if (!cached) return null;
 
       const data = cached as any;
@@ -2005,7 +1978,7 @@ export class ZeroAgent extends AIChatAgent<ZeroEnv> {
       const CACHE_TTL = 5 * 60 * 1000;
 
       if (now - data.timestamp > CACHE_TTL) {
-        await this.ctx.storage.delete('do_state_cache');
+        await this.cache.delete('do_state_cache');
         return null;
       }
 
@@ -2028,7 +2001,7 @@ export class ZeroAgent extends AIChatAgent<ZeroEnv> {
         shards,
         timestamp: Date.now(),
       };
-      await this.ctx.storage.put('do_state_cache', data);
+      await this.cache.set('do_state_cache', data);
     } catch (error) {
       console.error('[ZeroAgent] Failed to cache DO state:', error);
     }
@@ -2036,7 +2009,7 @@ export class ZeroAgent extends AIChatAgent<ZeroEnv> {
 
   async invalidateDoStateCache(): Promise<void> {
     try {
-      await this.ctx.storage.delete('do_state_cache');
+      await this.cache.delete('do_state_cache');
     } catch (error) {
       console.error('[ZeroAgent] Failed to invalidate DO state cache:', error);
     }

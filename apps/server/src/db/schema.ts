@@ -1,4 +1,5 @@
 import {
+  pgTable,
   pgTableCreator,
   text,
   timestamp,
@@ -322,3 +323,13 @@ export const emailTemplate = createTable(
     unique('mail0_email_template_user_id_name_unique').on(t.userId, t.name),
   ],
 );
+
+export const embeddings = pgTable('mail0_embeddings', {
+  id: text('id').primaryKey(),
+  connectionId: text('connection_id').notNull(),
+  contentType: text('content_type').notNull().default('thread'),
+  embedding: text('embedding').notNull(), // pgvector column, cast in queries
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});

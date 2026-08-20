@@ -1,5 +1,5 @@
 # ========================================
-# Base Stage: Alpine Linux with Bun
+# Base Stage: Alpine Linux with Node 22
 # ========================================
 FROM node:22-alpine AS base
 
@@ -10,7 +10,7 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install turbo globally
+# Install turbo & pnpm globally
 RUN npm install -g pnpm
 RUN pnpm install -g turbo
 
@@ -20,7 +20,6 @@ COPY apps/*/package.json ./apps/
 COPY packages/ ./packages/
 
 RUN pnpm install --prod --ignore-scripts
-
 
 # ========================================
 # Builder Stage: Build the Application
@@ -40,12 +39,11 @@ ENV CI=true
 RUN pnpm install --frozen-lockfile
 
 # Set environment variables for build
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production \
+ENV NODE_ENV=production \
     DOCKER_BUILD=true
 
 # Build the application
-RUN cd apps/mail && pnpm run build
+RUN cd apps/server && pnpm run build
 
 # ========================================
 # Runner Stage: Production Environment
@@ -53,29 +51,24 @@ RUN cd apps/mail && pnpm run build
 FROM base AS runner
 WORKDIR /app
 
+RUN addgroup -S -g 1001 nodejs && \
+    adduser -S -u 1001 serveruser -G nodejs
 
-
-RUN addgroup -S -g 1001 pnpm && \
-    adduser -S -u 1001 nextjs -G pnpm
-
-# Set environment variables for build
+# Set environment variables
 ENV NODE_ENV=production \
-    PORT=3000 \
-    HOSTNAME="0.0.0.0" \
-    NEXT_TELEMETRY_DISABLED=1
-
-# Copy entrypoint and run it
-COPY scripts/docker/ /app/scripts
-RUN chmod -R +x /app/scripts/*
+    PORT=8787
 
 # Copy the entire built application
-COPY --from=builder --chown=nextjs:pnpm /app ./
+COPY --from=builder --chown=serveruser:nodejs /app ./
 
 # Switch to non-root user
-USER nextjs
+USER serveruser
 
-# Set server port and host
-EXPOSE 3000
+# Set server port
+EXPOSE 8787
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD wget --spider --quiet http://127.0.0.1:8787/health || exit 1
 
 # Start the server
-CMD ["/app/scripts/entrypoint.sh"]
+CMD ["node", "apps/server/dist/main.js"]

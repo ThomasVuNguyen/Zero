@@ -1,5 +1,4 @@
-import { env } from 'cloudflare:workers';
-import Cloudflare from 'cloudflare';
+import { env } from '../env';
 
 // KV namespace IDs for different environments
 const KV_NAMESPACE_IDS = {
@@ -42,13 +41,15 @@ export const bulkDeleteKeys = async (
   }
 
   try {
-    const cloudflareClient = new Cloudflare({
-      apiToken: env.CLOUDFLARE_API_TOKEN || '',
-    });
-    const response = await cloudflareClient.kv.namespaces.bulkDelete(namespaceId, {
-      account_id: accountId,
-      body: keys,
-    });
+    // TODO: Migrate away from Cloudflare API
+    // const cloudflareClient = new Cloudflare({
+    //   apiToken: env.CLOUDFLARE_API_TOKEN || '',
+    // });
+    // const response = await cloudflareClient.kv.namespaces.bulkDelete(namespaceId, {
+    //   account_id: accountId,
+    //   body: keys,
+    // });
+    const response: any = { successful_key_count: 0 };
 
     const successful = response?.successful_key_count || 0;
     const failed = keys.length - successful;

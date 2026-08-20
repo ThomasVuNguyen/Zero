@@ -1,5 +1,5 @@
 import { getCurrentDateContext, GmailSearchAssistantSystemPrompt } from '../../lib/prompts';
-import { getThread, getZeroAgent } from '../../lib/server-utils';
+import { getThread, getZeroDriver } from '../../lib/server-utils';
 import type { IGetThreadResponse } from '../../lib/driver/types';
 import { composeEmail } from '../../trpc/routes/ai/compose';
 import { perplexity } from '@ai-sdk/perplexity';
@@ -21,17 +21,12 @@ const models: Record<ModelTypes, any> = {
 
 export const getEmbeddingVector = async (
   text: string,
-  gatewayId: 'vectorize-save' | 'vectorize-load',
+  _gatewayId: 'vectorize-save' | 'vectorize-load',
 ) => {
   try {
     const embeddingResponse = await env.AI.run(
       models.vectorize,
       { text },
-      {
-        gateway: {
-          id: gatewayId,
-        },
-      },
     );
     const embeddingVector = embeddingResponse.data[0];
     return embeddingVector ?? null;
@@ -132,7 +127,7 @@ const getThreadSummary = (connectionId: string) =>
       id: z.string().describe('The ID of the email thread to get the summary of'),
     }),
     execute: async ({ id }) => {
-      const response = await env.VECTORIZE.getByIds([id]);
+      const response = await env.VECTORIZE!.getByIds([id]);
       let thread: IGetThreadResponse | null = null;
       try {
         const { result } = await getThread(connectionId, id);
@@ -147,10 +142,10 @@ const getThreadSummary = (connectionId: string) =>
           return null;
         }
         const shortResponse = await env.AI.run('@cf/facebook/bart-large-cnn', {
-          input_text: result.summary,
+          text: result.summary,
         });
         return {
-          short: shortResponse.summary,
+          short: (shortResponse as any).data,
           subject: thread.latest?.subject,
           sender: thread.latest?.sender,
           date: thread.latest?.receivedOn,
@@ -220,7 +215,7 @@ const markAsRead = (connectionId: string) =>
       threadIds: z.array(z.string()).describe('The IDs of the threads to mark as read'),
     }),
     execute: async ({ threadIds }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       await Promise.all(
         threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, [], ['UNREAD'])),
       );
@@ -235,7 +230,7 @@ const markAsUnread = (connectionId: string) =>
       threadIds: z.array(z.string()).describe('The IDs of the threads to mark as unread'),
     }),
     execute: async ({ threadIds }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       await Promise.all(
         threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, ['UNREAD'], [])),
       );
@@ -260,7 +255,7 @@ const modifyLabels = (connectionId: string) =>
       }),
     }),
     execute: async ({ threadIds, options }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       await Promise.all(
         threadIds.map((threadId) =>
           agent.modifyThreadLabelsInDB(threadId, options.addLabels, options.removeLabels),
@@ -275,7 +270,7 @@ const getUserLabels = (connectionId: string) =>
     description: 'Get all user labels',
     parameters: z.object({}),
     execute: async () => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       return await agent.getUserLabels();
     },
   });
@@ -314,7 +309,7 @@ const sendEmail = (connectionId: string) =>
     }),
     execute: async (data) => {
       try {
-        const { stub: agent } = await getZeroAgent(connectionId);
+        const agent = await getZeroDriver(connectionId);
         const { draftId, ...mail } = data;
 
         if (draftId) {
@@ -360,7 +355,7 @@ const createLabel = (connectionId: string) =>
         }),
     }),
     execute: async ({ name, backgroundColor, textColor }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       await agent.createLabel({ name, color: { backgroundColor, textColor } });
       return { name, backgroundColor, textColor, success: true };
     },
@@ -373,7 +368,7 @@ const bulkDelete = (connectionId: string) =>
       threadIds: z.array(z.string()).describe('Array of email IDs to move to trash'),
     }),
     execute: async ({ threadIds }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       await Promise.all(
         threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, ['TRASH'], [])),
       );
@@ -388,7 +383,7 @@ const bulkArchive = (connectionId: string) =>
       threadIds: z.array(z.string()).describe('Array of email IDs to move to archive'),
     }),
     execute: async ({ threadIds }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       await Promise.all(
         threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, [], ['INBOX'])),
       );
@@ -403,7 +398,7 @@ const deleteLabel = (connectionId: string) =>
       id: z.string().describe('The ID of the label to delete'),
     }),
     execute: async ({ id }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
+      const agent = await getZeroDriver(connectionId);
       await agent.deleteLabel(id);
       return { id, success: true };
     },
@@ -505,7 +500,7 @@ export const tools = async (connectionId: string, ragEffect: boolean = false) =>
         folder: z.string().describe('The folder to search the inbox for').default('inbox'),
       }),
       execute: async ({ query, maxResults, folder }) => {
-        const { stub: agent } = await getZeroAgent(connectionId);
+        const agent = await getZeroDriver(connectionId);
         const res = await agent.searchThreads({ query, maxResults, folder });
         return res.threadIds;
       },

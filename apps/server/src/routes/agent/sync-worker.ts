@@ -1,15 +1,12 @@
 import { connection as connectionSchema } from '../../db/schema';
 import { connectionToDriver } from '../../lib/server-utils';
 import { withRetry } from '../../lib/gmail-rate-limit';
-import { DurableObject } from 'cloudflare:workers';
 import type { ParsedMessage } from '../../types';
 import type { ZeroEnv } from '../../env';
 import { Effect } from 'effect';
 
-export class ThreadSyncWorker extends DurableObject<ZeroEnv> {
-  constructor(state: DurableObjectState, env: ZeroEnv) {
-    super(state, env);
-  }
+export class ThreadSyncWorker {
+  constructor(public env: ZeroEnv) {}
 
   private getThreadKey(connectionId: string, threadId: string) {
     return `${connectionId}/${threadId}.json`;

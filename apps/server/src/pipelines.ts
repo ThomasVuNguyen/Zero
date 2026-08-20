@@ -16,8 +16,7 @@ import {
   type WorkflowContext,
 } from './thread-workflow-utils/workflow-engine';
 import { getServiceAccount } from './lib/factories/google-subscription.factory';
-import { getThread, getZeroAgent } from './lib/server-utils';
-import { DurableObject } from 'cloudflare:workers';
+import { getThread, getZeroDriver } from './lib/server-utils';
 import { bulkDeleteKeys } from './lib/bulk-delete';
 import { type gmail_v1 } from '@googleapis/gmail';
 import { Effect, Console, Logger } from 'effect';
@@ -129,10 +128,8 @@ export type WorkflowError =
   | ThreadWorkflowError
   | UnsupportedWorkflowError;
 
-export class WorkflowRunner extends DurableObject<ZeroEnv> {
-  constructor(state: DurableObjectState, env: ZeroEnv) {
-    super(state, env);
-  }
+export class WorkflowRunner {
+  constructor(public env: ZeroEnv) {}
 
   /**
    * This function runs the main workflow. The main workflow is responsible for processing incoming messages from a Pub/Sub subscription and passing them to the appropriate pipeline.
@@ -290,7 +287,7 @@ export class WorkflowRunner extends DurableObject<ZeroEnv> {
 
       const agent = yield* Effect.tryPromise({
         try: async () => {
-          const { stub: agent } = await getZeroAgent(foundConnection.id);
+          const agent = await getZeroDriver(foundConnection.id);
           return agent;
         },
         catch: (error) => ({ _tag: 'DatabaseError' as const, error }),

@@ -1,6 +1,4 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { env } from 'cloudflare:workers';
-import { McpAgent } from 'agents/mcp';
 import z from 'zod';
 
 interface ThoughtData {
@@ -173,13 +171,26 @@ export class SequentialThinkingProcessor {
   }
 }
 
-export class ThinkingMCP extends McpAgent<typeof env> {
+export class ThinkingMCP {
   thinkingServer = new SequentialThinkingProcessor();
   server = new McpServer({
     name: 'thinking-mcp',
     version: '1.0.0',
     description: 'Thinking MCP',
   });
+
+  constructor(public props: any = {}, public env: any = {}, public ctx: any = {}) {}
+
+  static serveSSE(path: string, options: any) {
+    return {
+      fetch: async (request: any, env: any, ctx: any) => {
+        const props = ctx.props || {};
+        const instance = new ThinkingMCP(props, env, ctx);
+        await instance.init();
+        return new Response('ThinkingMCP SSE not fully ported to Node yet', { status: 501 });
+      }
+    };
+  }
 
   async init(): Promise<void> {
     this.server.registerTool(

@@ -1,7 +1,7 @@
 import { BaseSubscriptionFactory, type SubscriptionData } from './base-subscription.factory';
 import { c, getNotificationsUrl } from '../../lib/utils';
 import { resetConnection } from '../server-utils';
-import jwt from '@tsndr/cloudflare-worker-jwt';
+import * as jose from 'jose';
 import { env } from '../../env';
 import { connection } from '../../db/schema';
 import { EProviders } from '../../types';
@@ -62,9 +62,10 @@ class GoogleSubscriptionFactory extends BaseSubscriptionFactory {
       iat: now,
     };
 
-    const signedJWT = await jwt.sign(payload, serviceAccount.private_key, {
-      algorithm: 'RS256',
-    });
+    const privateKey = await jose.importPKCS8(serviceAccount.private_key, 'RS256');
+    const signedJWT = await new jose.SignJWT(payload)
+      .setProtectedHeader({ alg: 'RS256' })
+      .sign(privateKey);
 
     const response = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -145,7 +146,7 @@ class GoogleSubscriptionFactory extends BaseSubscriptionFactory {
       throw new Error(`Failed to fetch IAM policy: ${await policyResponse.text()}`);
     }
 
-    const policy: IamPolicy = await policyResponse.json();
+    const policy = (await policyResponse.json()) as IamPolicy;
     policy.bindings = policy.bindings || [];
     policy.bindings.push({
       role: 'roles/pubsub.publisher',

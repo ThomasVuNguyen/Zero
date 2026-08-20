@@ -1,97 +1,149 @@
+version: '3.8'
+
 services:
-  zero:
+  frontend:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"
     environment:
-      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://cf-worker.example}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-zerodotemail}
-      REDIS_URL: ${REDIS_URL}
-      REDIS_TOKEN: ${REDIS_TOKEN:-upstash-local-token}
-      RESEND_API_KEY: ${RESEND_API_KEY}
-      AI_SYSTEM_PROMPT: ${AI_SYSTEM_PROMPT}
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL}
-      OPENAI_MINI_MODEL: ${OPENAI_MINI_MODEL}
-      NEXT_PUBLIC_ELEVENLABS_AGENT_ID: ${NEXT_PUBLIC_ELEVENLABS_AGENT_ID}
-      NEXT_PUBLIC_IMAGE_PROXY: ${NEXT_PUBLIC_IMAGE_PROXY}
-      NEXT_PUBLIC_POSTHOG_KEY: ${NEXT_PUBLIC_POSTHOG_KEY}
-      NEXT_PUBLIC_POSTHOG_HOST: ${NEXT_PUBLIC_POSTHOG_HOST}
-      NEXT_PUBLIC_IMAGE_API_URL: ${NEXT_PUBLIC_IMAGE_API_URL}
+      - PORT=3000
+      - NODE_ENV=production
+      - NEXT_PUBLIC_APP_URL=https://${SERVICE_FQDN_FRONTEND}
+      - NEXT_PUBLIC_BACKEND_URL=https://${SERVICE_FQDN_BACKEND}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8787"
+    environment:
+      - PORT=8787
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-mailone}?sslmode=disable
+      - REDIS_URL=redis://:${REDIS_TOKEN:-valkey}@valkey:6379
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
+      - MINIO_USE_SSL=false
+      - MINIO_ACCESS_KEY=${SERVICE_USER_MINIO}
+      - MINIO_SECRET_KEY=${SERVICE_PASSWORD_MINIO}
+      - MINIO_BUCKET_NAME=mailone
+      - ENCRYPTION_KEY=${SERVICE_BASE64_BACKEND}
     depends_on:
       db:
         condition: service_healthy
-      migrations:
-        condition: service_completed_successfully
       valkey:
         condition: service_healthy
-      upstash-proxy:
+      minio:
         condition: service_healthy
-    healthcheck:
-      test: ['CMD', 'wget', '--spider', '--quiet', 'http://127.0.0.1:3000']
-      interval: 90s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    ports:
-      - 3000:3000
+      migrations:
+        condition: service_completed_successfully
 
   migrations:
     build:
       context: .
-      dockerfile: docker/db/Dockerfile
+      dockerfile: docker/server/Dockerfile
+    restart: "no"
+    command: ["node", "apps/server/dist/migrate.js"]
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-zerodotemail}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-mailone}?sslmode=disable
     depends_on:
       db:
         condition: service_healthy
-    command: ['pnpm', 'run', 'db:migrate']
-    restart: 'no'
+    labels:
+      - "coolify.exclude_from_hc=true"
 
   db:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-zerodotemail}
-      PGDATA: /var/lib/postgresql/data/pgdata
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - POSTGRES_DB=${POSTGRES_DB:-mailone}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD', 'pg_isready', '-U', 'postgres', '-d', 'zerodotemail']
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-mailone}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   valkey:
-    image: docker.io/bitnami/valkey:8.0
-    environment:
-      - ALLOW_EMPTY_PASSWORD=yes
-      - VALKEY_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
+    image: valkey/valkey:8
+    restart: unless-stopped
+    command: valkey-server --requirepass ${REDIS_TOKEN:-valkey}
     volumes:
-      - valkey-data:/bitnami/valkey/data
+      - valkey-data:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', '-h', 'localhost', '-p', '6379', 'ping']
+      test: ["CMD", "valkey-cli", "-a", "${REDIS_TOKEN:-valkey}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   upstash-proxy:
-    image: hiett/serverless-redis-http:latest
+    image: hiett/upstash-redis-proxy:latest
+    restart: unless-stopped
     environment:
-      SRH_MODE: env
-      SRH_TOKEN: ${REDIS_TOKEN:-upstash-local-token}
-      SRH_CONNECTION_STRING: 'redis://valkey:6379'
+      - REDIS_URL=redis://:${REDIS_TOKEN:-valkey}@valkey:6379
+      - UPSTASH_TOKEN=${REDIS_TOKEN:-valkey}
+    depends_on:
+      valkey:
+        condition: service_healthy
     healthcheck:
-      test: ['CMD', 'wget', '--spider', '--quiet', 'http://127.0.0.1:80']
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${SERVICE_USER_MINIO}
+      - MINIO_ROOT_PASSWORD=${SERVICE_PASSWORD_MINIO}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-11-05T11-29-45Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 ${SERVICE_USER_MINIO} ${SERVICE_PASSWORD_MINIO};
+      mc mb myminio/mailone --ignore-existing;
+      mc anonymous set public myminio/mailone;
+      exit 0;
+      "
+    labels:
+      - "coolify.exclude_from_hc=true"
 
 volumes:
-  valkey-data:
   postgres-data:
+  valkey-data:
+  minio-data:
