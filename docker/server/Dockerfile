@@ -29,11 +29,8 @@ COPY patches/ ./patches/
 # Create empty scripts dir to satisfy workspace glob
 RUN mkdir -p scripts
 
-# Debug: show what files we have
-RUN ls -la && ls -la apps/ && ls -la packages/ && cat pnpm-workspace.yaml
-
 # Install all dependencies
-RUN pnpm install --no-frozen-lockfile 2>&1 || (echo "PNPM INSTALL FAILED" && pnpm install --no-frozen-lockfile --reporter=default 2>&1 && exit 1)
+RUN pnpm install --no-frozen-lockfile
 
 # ========================================
 # Builder Stage: Build the Application
