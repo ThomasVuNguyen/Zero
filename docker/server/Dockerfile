@@ -2,7 +2,7 @@
 # Base Stage: Alpine Linux with Node 22
 # ========================================
 FROM node:22-alpine AS base
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
 
 # ========================================
 # Dependencies Stage: Install Dependencies
@@ -26,7 +26,7 @@ COPY packages/tsconfig/package.json ./packages/tsconfig/package.json
 COPY patches/ ./patches/
 
 # Install all dependencies
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 
 # ========================================
 # Builder Stage: Build the Application
