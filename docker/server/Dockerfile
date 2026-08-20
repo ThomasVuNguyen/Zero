@@ -2,7 +2,6 @@
 # Base Stage: Alpine Linux with Node 22
 # ========================================
 FROM node:22-alpine AS base
-RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
 
 # ========================================
 # Dependencies Stage: Install Dependencies
@@ -10,6 +9,8 @@ RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
 FROM base AS deps
 RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
+
+RUN npm install -g pnpm@10.15.0
 
 # Copy workspace config first for layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
@@ -22,8 +23,11 @@ COPY packages/eslint-config/package.json ./packages/eslint-config/package.json
 COPY packages/testing/package.json ./packages/testing/package.json
 COPY packages/tsconfig/package.json ./packages/tsconfig/package.json
 
-# Check for patches directory
+# Copy patches
 COPY patches/ ./patches/
+
+# Create empty scripts dir to satisfy workspace glob
+RUN mkdir -p scripts
 
 # Install all dependencies
 RUN pnpm install --no-frozen-lockfile
@@ -33,6 +37,8 @@ RUN pnpm install --no-frozen-lockfile
 # ========================================
 FROM base AS builder
 WORKDIR /app
+
+RUN npm install -g pnpm@10.15.0
 
 # Copy installed deps from deps stage
 COPY --from=deps /app ./
