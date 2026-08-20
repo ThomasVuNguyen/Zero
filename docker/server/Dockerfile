@@ -29,8 +29,8 @@ COPY patches/ ./patches/
 # Create empty scripts dir to satisfy workspace glob
 RUN mkdir -p scripts
 
-# Install all dependencies
-RUN pnpm install --no-frozen-lockfile
+# Install all dependencies — capture output for debugging
+RUN pnpm install --no-frozen-lockfile > /tmp/pnpm-output.log 2>&1 || (cat /tmp/pnpm-output.log && exit 1)
 
 # ========================================
 # Builder Stage: Build the Application
