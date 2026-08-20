@@ -2,24 +2,31 @@
 # Base Stage: Alpine Linux with Node 22
 # ========================================
 FROM node:22-alpine AS base
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # ========================================
 # Dependencies Stage: Install Dependencies
 # ========================================
 FROM base AS deps
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
-# Install turbo & pnpm globally
-RUN npm install -g pnpm
-RUN pnpm install -g turbo
-
+# Copy workspace config first for layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
-RUN mkdir -p apps packages
-COPY apps/*/package.json ./apps/
-COPY packages/ ./packages/
 
-RUN pnpm install --prod --ignore-scripts
+# Copy all package.json files preserving directory structure
+COPY apps/server/package.json ./apps/server/package.json
+COPY apps/mail/package.json ./apps/mail/package.json
+COPY packages/cli/package.json ./packages/cli/package.json
+COPY packages/eslint-config/package.json ./packages/eslint-config/package.json
+COPY packages/testing/package.json ./packages/testing/package.json
+COPY packages/tsconfig/package.json ./packages/tsconfig/package.json
+
+# Check for patches directory
+COPY patches/ ./patches/
+
+# Install all dependencies
+RUN pnpm install --frozen-lockfile
 
 # ========================================
 # Builder Stage: Build the Application
@@ -27,22 +34,17 @@ RUN pnpm install --prod --ignore-scripts
 FROM base AS builder
 WORKDIR /app
 
-RUN npm install -g pnpm
+# Copy installed deps from deps stage
+COPY --from=deps /app ./
 
-# Copy workspace configuration and source code
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+# Copy source code
 COPY . .
 
 ENV CI=true
+ENV NODE_ENV=production
+ENV DOCKER_BUILD=true
 
-# Install all dependencies (including devDependencies for build)
-RUN pnpm install --frozen-lockfile
-
-# Set environment variables for build
-ENV NODE_ENV=production \
-    DOCKER_BUILD=true
-
-# Build the application
+# Build the server
 RUN cd apps/server && pnpm run build
 
 # ========================================
@@ -54,21 +56,22 @@ WORKDIR /app
 RUN addgroup -S -g 1001 nodejs && \
     adduser -S -u 1001 serveruser -G nodejs
 
-# Set environment variables
 ENV NODE_ENV=production \
     PORT=8787
 
-# Copy the entire built application
-COPY --from=builder --chown=serveruser:nodejs /app ./
+# Copy node_modules and built app
+COPY --from=deps --chown=serveruser:nodejs /app/node_modules ./node_modules
+COPY --from=deps --chown=serveruser:nodejs /app/apps/server/node_modules ./apps/server/node_modules
+COPY --from=builder --chown=serveruser:nodejs /app/apps/server/dist ./apps/server/dist
+COPY --from=builder --chown=serveruser:nodejs /app/apps/server/package.json ./apps/server/package.json
+COPY --from=builder --chown=serveruser:nodejs /app/package.json ./package.json
+COPY --from=builder --chown=serveruser:nodejs /app/apps/server/src/db ./apps/server/src/db
 
-# Switch to non-root user
 USER serveruser
 
-# Set server port
 EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --spider --quiet http://127.0.0.1:8787/health || exit 1
 
-# Start the server
 CMD ["node", "apps/server/dist/main.js"]
