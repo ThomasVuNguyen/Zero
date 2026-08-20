@@ -74,8 +74,7 @@ RUN chmod -R +x /app/scripts/*
 # Copy node_modules and built app
 COPY --from=deps --chown=appuser:nodejs /app/node_modules ./node_modules
 COPY --from=deps --chown=appuser:nodejs /app/apps/mail/node_modules ./apps/mail/node_modules
-COPY --from=builder --chown=appuser:nodejs /app/apps/mail/dist ./apps/mail/dist
-COPY --from=builder --chown=appuser:nodejs /app/apps/mail/.output ./apps/mail/.output
+COPY --from=builder --chown=appuser:nodejs /app/apps/mail/build ./apps/mail/build
 COPY --from=builder --chown=appuser:nodejs /app/apps/mail/package.json ./apps/mail/package.json
 COPY --from=builder --chown=appuser:nodejs /app/package.json ./package.json
 
