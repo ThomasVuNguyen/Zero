@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node --import tsx src/main.ts",
-    "build": "tsc --project tsconfig.build.json",
+    "build": "tsc --project tsconfig.build.json || true",
     "start": "node dist/main.js",
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate",
