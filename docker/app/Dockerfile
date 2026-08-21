@@ -79,9 +79,17 @@ RUN chmod -R +x /app/scripts/*
 # Copy node_modules and built app
 COPY --from=deps --chown=appuser:nodejs /app/node_modules ./node_modules
 COPY --from=deps --chown=appuser:nodejs /app/apps/mail/node_modules ./apps/mail/node_modules
+COPY --from=deps --chown=appuser:nodejs /app/apps/server/node_modules ./apps/server/node_modules
 COPY --from=builder --chown=appuser:nodejs /app/apps/mail/build ./apps/mail/build
 COPY --from=builder --chown=appuser:nodejs /app/apps/mail/package.json ./apps/mail/package.json
 COPY --from=builder --chown=appuser:nodejs /app/package.json ./package.json
+
+# Copy server source code (for backend container detection by entrypoint.sh)
+# Coolify builds both frontend and backend from this Dockerfile
+COPY --chown=appuser:nodejs apps/server/src ./apps/server/src
+COPY --chown=appuser:nodejs apps/server/package.json ./apps/server/package.json
+COPY --chown=appuser:nodejs apps/server/tsconfig.json ./apps/server/tsconfig.json
+COPY --chown=appuser:nodejs packages ./packages
 
 USER appuser
 
