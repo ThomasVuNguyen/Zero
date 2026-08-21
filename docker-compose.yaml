@@ -11,8 +11,8 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=production
-      - VITE_PUBLIC_APP_URL=http://${SERVICE_FQDN_FRONTEND}
-      - VITE_PUBLIC_BACKEND_URL=http://${SERVICE_FQDN_BACKEND}
+      - VITE_PUBLIC_APP_URL=http://mail.comfyspace.tech
+      - VITE_PUBLIC_BACKEND_URL=http://api-mail.comfyspace.tech
     depends_on:
       backend:
         condition: service_started
@@ -42,9 +42,9 @@ services:
       - S3_SECRET_KEY=${SERVICE_PASSWORD_MINIO}
       - S3_BUCKET=threads
       - BETTER_AUTH_SECRET=${SERVICE_BASE64_BACKEND}
-      - BETTER_AUTH_URL=http://${SERVICE_FQDN_FRONTEND}
-      - VITE_PUBLIC_APP_URL=http://${SERVICE_FQDN_FRONTEND}
-      - VITE_PUBLIC_BACKEND_URL=http://${SERVICE_FQDN_BACKEND}
+      - BETTER_AUTH_URL=http://mail.comfyspace.tech
+      - VITE_PUBLIC_APP_URL=http://mail.comfyspace.tech
+      - VITE_PUBLIC_BACKEND_URL=http://api-mail.comfyspace.tech
       - COOKIE_DOMAIN=${COOKIE_DOMAIN}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
@@ -55,8 +55,8 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - BETTER_AUTH_TRUSTED_ORIGINS=http://${SERVICE_FQDN_FRONTEND},https://${SERVICE_FQDN_FRONTEND}
-      - BASE_URL=http://${SERVICE_FQDN_BACKEND}
+      - BETTER_AUTH_TRUSTED_ORIGINS=http://mail.comfyspace.tech,https://mail.comfyspace.tech
+      - BASE_URL=http://api-mail.comfyspace.tech
     depends_on:
       db:
         condition: service_healthy
