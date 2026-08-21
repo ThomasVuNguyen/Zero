@@ -15,7 +15,7 @@ services:
       - VITE_PUBLIC_BACKEND_URL=http://${SERVICE_FQDN_BACKEND}
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:3000"]
       interval: 30s
