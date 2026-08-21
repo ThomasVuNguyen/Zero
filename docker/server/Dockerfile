@@ -61,6 +61,11 @@ COPY --chown=serveruser:nodejs packages ./packages
 # Remove any scripts that Coolify might inject from the frontend image
 RUN rm -rf /app/scripts
 
+# Copy server-specific entrypoint that starts the API server (not the SPA)
+# This overwrites any entrypoint.sh that Coolify injects
+COPY --chown=serveruser:nodejs scripts/docker/entrypoint-server.sh /app/scripts/entrypoint.sh
+RUN chmod +x /app/scripts/entrypoint.sh
+
 USER serveruser
 
 EXPOSE 8787
