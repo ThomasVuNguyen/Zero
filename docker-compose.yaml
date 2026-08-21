@@ -95,11 +95,12 @@ services:
       start_period: 10s
 
   upstash-proxy:
-    image: hiett/upstash-redis-proxy:latest
+    image: hiett/serverless-redis-http:latest
     restart: unless-stopped
     environment:
-      - REDIS_URL=redis://:${REDIS_TOKEN:-valkey}@valkey:6379
-      - UPSTASH_TOKEN=${REDIS_TOKEN:-valkey}
+      - SRH_MODE=env
+      - SRH_TOKEN=${REDIS_TOKEN:-valkey}
+      - SRH_CONNECTION_STRING=redis://valkey:6379
     depends_on:
       valkey:
         condition: service_healthy
