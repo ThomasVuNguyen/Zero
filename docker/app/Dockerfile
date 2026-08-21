@@ -46,11 +46,12 @@ ENV CI=true
 ENV NODE_ENV=production
 ENV DOCKER_BUILD=true
 # Placeholder URLs that get replaced at runtime by entrypoint.sh
-ENV VITE_PUBLIC_BACKEND_URL=http://REPLACE-BACKEND-URL.com
-ENV VITE_PUBLIC_APP_URL=http://REPLACE-APP-URL.com
+# Change these values to force Docker cache invalidation when needed
+ENV VITE_PUBLIC_BACKEND_URL=http://PLACEHOLDER-BACKEND-API.invalid
+ENV VITE_PUBLIC_APP_URL=http://PLACEHOLDER-FRONTEND-APP.invalid
 
-# Force cache invalidation for URL changes
-ARG CACHEBUST=1
+# Force cache invalidation (change value to bust)
+ARG CACHEBUST=2
 
 # Build the frontend
 RUN cd apps/mail && pnpm run build
