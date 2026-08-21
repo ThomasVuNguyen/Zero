@@ -29,23 +29,17 @@ COPY patches/ ./patches/
 # Create empty scripts dir to satisfy workspace glob
 RUN mkdir -p scripts
 
-# Install all dependencies — capture output for debugging
 # Install all dependencies (skip postinstall scripts)
 RUN pnpm install --no-frozen-lockfile --ignore-scripts
 
 # ========================================
 # Builder Stage: Build the Application
 # ========================================
-FROM base AS builder
-WORKDIR /app
+FROM deps AS builder
 
-RUN npm install -g pnpm@10.15.0
-
-# Copy installed deps from deps stage
-COPY --from=deps /app ./
-
-# Copy source code
-COPY . .
+# Copy only the frontend source (not the entire repo)
+COPY apps/mail/ ./apps/mail/
+COPY packages/ ./packages/
 
 ENV CI=true
 ENV NODE_ENV=production
@@ -53,6 +47,9 @@ ENV DOCKER_BUILD=true
 
 # Build the frontend
 RUN cd apps/mail && pnpm run build
+
+# Clean up build cache to reduce layer size
+RUN rm -rf apps/mail/node_modules/.cache apps/mail/node_modules/.vite
 
 # ========================================
 # Runner Stage: Production Environment
