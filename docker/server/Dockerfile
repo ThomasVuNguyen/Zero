@@ -58,10 +58,13 @@ COPY --chown=serveruser:nodejs apps/server/tsconfig.json ./apps/server/tsconfig.
 COPY --chown=serveruser:nodejs package.json ./package.json
 COPY --chown=serveruser:nodejs packages ./packages
 
+# Remove any scripts that Coolify might inject from the frontend image
+RUN rm -rf /app/scripts
+
 USER serveruser
 
 EXPOSE 8787
 
 HEALTHCHECK NONE
 
-CMD ["node", "--import", "tsx", "apps/server/src/main.ts"]
+ENTRYPOINT ["node", "--import", "tsx", "apps/server/src/main.ts"]
