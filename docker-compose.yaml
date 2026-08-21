@@ -27,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: docker/server/Dockerfile
-    command: ["node", "--import", "tsx", "apps/server/src/main.ts"]
+    entrypoint: ["node", "--import", "tsx", "apps/server/src/main.ts"]
     restart: unless-stopped
     expose:
       - "8787"
