@@ -33,26 +33,13 @@ RUN mkdir -p scripts
 RUN pnpm install --no-frozen-lockfile --ignore-scripts
 
 # ========================================
-# Builder Stage: Build the Application
-# ========================================
-FROM deps AS builder
-
-# Copy only the server source (not the entire repo)
-COPY apps/server/ ./apps/server/
-COPY packages/ ./packages/
-
-ENV CI=true
-ENV NODE_ENV=production
-ENV DOCKER_BUILD=true
-
-# Build the server (|| true to skip pre-existing type errors)
-RUN cd apps/server && pnpm run build
-
-# ========================================
 # Runner Stage: Production Environment
+# Uses tsx to run TypeScript directly
 # ========================================
 FROM base AS runner
 WORKDIR /app
+
+RUN npm install -g pnpm@10.15.0
 
 RUN addgroup -S -g 1001 nodejs && \
     adduser -S -u 1001 serveruser -G nodejs
@@ -60,19 +47,22 @@ RUN addgroup -S -g 1001 nodejs && \
 ENV NODE_ENV=production \
     PORT=8787
 
-# Copy node_modules and built app
+# Copy node_modules
 COPY --from=deps --chown=serveruser:nodejs /app/node_modules ./node_modules
 COPY --from=deps --chown=serveruser:nodejs /app/apps/server/node_modules ./apps/server/node_modules
-COPY --from=builder --chown=serveruser:nodejs /app/apps/server/dist ./apps/server/dist
-COPY --from=builder --chown=serveruser:nodejs /app/apps/server/package.json ./apps/server/package.json
-COPY --from=builder --chown=serveruser:nodejs /app/package.json ./package.json
-COPY --from=builder --chown=serveruser:nodejs /app/apps/server/src/db ./apps/server/src/db
+
+# Copy source code (tsx runs TS directly, no build needed)
+COPY --chown=serveruser:nodejs apps/server/src ./apps/server/src
+COPY --chown=serveruser:nodejs apps/server/package.json ./apps/server/package.json
+COPY --chown=serveruser:nodejs apps/server/tsconfig.json ./apps/server/tsconfig.json
+COPY --chown=serveruser:nodejs package.json ./package.json
+COPY --chown=serveruser:nodejs packages ./packages
 
 USER serveruser
 
 EXPOSE 8787
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD wget --spider --quiet http://127.0.0.1:8787/health || exit 1
 
-CMD ["node", "apps/server/dist/main.js"]
+CMD ["node", "--import", "tsx", "apps/server/src/main.ts"]
