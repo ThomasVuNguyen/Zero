@@ -45,6 +45,9 @@ COPY packages/ ./packages/
 ENV CI=true
 ENV NODE_ENV=production
 ENV DOCKER_BUILD=true
+# Placeholder URLs that get replaced at runtime by entrypoint.sh
+ENV VITE_PUBLIC_BACKEND_URL=http://REPLACE-BACKEND-URL.com
+ENV VITE_PUBLIC_APP_URL=http://REPLACE-APP-URL.com
 
 # Build the frontend
 RUN cd apps/mail && pnpm run build

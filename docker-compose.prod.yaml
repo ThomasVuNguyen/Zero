@@ -55,6 +55,8 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - BETTER_AUTH_TRUSTED_ORIGINS=http://${SERVICE_FQDN_FRONTEND},https://${SERVICE_FQDN_FRONTEND}
+      - BASE_URL=http://${SERVICE_FQDN_BACKEND}
     depends_on:
       db:
         condition: service_healthy
