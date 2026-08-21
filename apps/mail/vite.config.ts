@@ -14,7 +14,7 @@ const ReactCompilerConfig = {
 
 export default defineConfig({
   plugins: [
-    oxlintPlugin(),
+    ...(process.env.CI ? [] : [oxlintPlugin()]),
     reactRouter(),
 
     babel({

@@ -37,8 +37,9 @@ RUN pnpm install --no-frozen-lockfile --ignore-scripts
 # ========================================
 FROM deps AS builder
 
-# Copy only the frontend source (not the entire repo)
+# Copy source code (mail app + server for workspace deps)
 COPY apps/mail/ ./apps/mail/
+COPY apps/server/ ./apps/server/
 COPY packages/ ./packages/
 
 ENV CI=true
